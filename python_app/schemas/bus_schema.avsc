@@ -1,0 +1,15 @@
+{
+    "type" : "record", 
+    "name" : "BusArrival", 
+    "namespace" : "bus.streaming", 
+    "fields": [ 
+        {"name" : "station_id", "type" : "string"},
+        {"name" : "station_name", "type" : "string"},
+        {"name" : "bus_id", "type" : "string"},
+
+        {"name" : "arrival_sec_1", "type": ["null", "int"], "default": null},
+        {"name" : "arrival_sec_2", "type": ["null", "int"], "default": null},
+
+        {"name": "ingestion_time", "type": "long"}
+    ]
+}
