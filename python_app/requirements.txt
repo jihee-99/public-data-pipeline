@@ -5,3 +5,4 @@ authlib
 cachetools
 attrs
 fastavro
+python-dotenv

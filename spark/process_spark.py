@@ -1,171 +1,294 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_unixtime, window, avg
+import requests
 from pyspark.sql.avro.functions import from_avro
-import json
-import logging
+from pyspark.sql.functions import col, expr, current_timestamp, window, avg, first, max, round
+import pymysql
+from pyspark.sql.functions import to_date
 
-# Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("bus-streaming")
 
-# Spark Session
 spark = SparkSession.builder \
     .appName("bus-streaming") \
-    .config("spark.jars.packages",
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,"
-            "mysql:mysql-connector-j:8.0.33") \
+    .config(
+        "spark.hadoop.fs.s3a.aws.credentials.provider",
+        "com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
+    ) \
+    .config(
+        "spark.hadoop.fs.s3a.impl",
+        "org.apache.hadoop.fs.s3a.S3AFileSystem"
+    ) \
     .getOrCreate()
 
-# 로그 출력 수준을 'WARN'으로 설정
+
 spark.sparkContext.setLogLevel("WARN")
 
-# Kafka Source (Consumer)
-# read는 배치 처리, readStream은 계속 들어오는 데이터 처리
-#.format("kafka") : Spark가 Kafka에 연결해서 데이터 가져옴
-#.option("kafka.bootstrap.servers", "kafka1:19092") : 여기로 접속해서 데이터 가져옴
-#.option("subscribe", "bus_raw_data") : "bus_raw_data"라는 이름의 토픽 구독
-#.option("startingOffsets", "latest") : 어디서부터 읽을지 설정, latest -> 지금부터 새로 들어오는 데이터만 읽기
-#.option("failOnDataLoss", "false") : 일부 데이터가 없어도 에러 없이 계속 처리 진행
-#.load() : 위 설정을 실제로 실행해서 dataframe 생성
-logger.info("Starting Kafka stream...")
-
+# kafka source
+# .option("failOnDataLoss", "false") : offset 날아가도 job 안 죽음 => kafka에 예전 offset 없으면 그냥 건너뛰고 계속 진행
+# s3는 언제 쓰냐? => kafka 데이터 날아감 ->  kafka로는 복구 불가능, 대신 s3 있으면 다시 처리 가능
+# 그전까지 테스트용 : 컨테이너 내리고 -> vscode 터미널에 Remove-Item -Recurse -Force .\chk -> 컨테이너 올리기
 kafka_df = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "kafka1:19092") \
+    .option("kafka.bootstrap.servers", "kafka1:19092,kafka2:19093,kafka3:19094") \
     .option("subscribe", "bus_raw_data") \
     .option("startingOffsets", "latest") \
     .option("failOnDataLoss", "false") \
     .load()
 
-# Avro Schema 정의 (Producer와 동일해야 함)
-avro_schema = {
-    "type" : "record", 
-    "name" : "BusArrival", 
-    "namespace" : "bus.streaming", 
-    "fields": [ 
-        {"name" : "station_id", "type" : "string"},
-        {"name" : "station_name", "type" : "string"},
-        {"name" : "bus_id", "type" : "string"},
-
-        {"name" : "arrival_sec_1", "type": "int"},
-        {"name" : "arrival_sec_2", "type": "int"},
-
-        {"name": "ingestion_time", "type": "long"}
-    ]
-}
-
-# 딕셔너리 형태의 Avro 스키마를 문자열로 바꿔서 avro_schema_str에 저장
-avro_schema_str = json.dumps(avro_schema)
-
-# Avro -> DataFrame 변환
-# kafka 스트리밍 데이터를 사람이 쓸 수 있는 형태로 파싱하는 단계 (kafka에서 받은 바이너리 데이터를 Avro 스키마로 해석해서 dataframe 형성)
-parsed_df = kafka_df.select(
-    col("key").cast("string").alias("key"), #kafka의 key는 보통 바이너리임, 이걸 문자열로 변환(cast("string")), 그리고 이름을 "key"로 유지
-    from_avro(col("value"), avro_schema_str).alias("data") #value -> kafka 메시지(바이너리)임. from_avro(~) -> avro 형식으로 디코딩, avro_schema -> 데이터 구조 정의(JSON 형태 스키마). 그 결과 data라는 구조체(struct) 컬럼 생성됨
-).select("data.*") #data는 struct(중첩 객체), "data.*" -> 내부 필드를 전부 꺼내서 컬럼으로 펼침. / 처리 전 : key | value (binary) -> 처리 후 : bus_id | speed | timestamp | ...
-
-# event_time 생성 (ms -> timestamp)
-# ingestion_time을 timestamp 타입의 lastupdate 컬럼으로 변환해서 추가
-parsed_df = parsed_df.withColumn(
-    "lastupdate",
-    from_unixtime(col("ingestion_time") / 1000).cast("timestamp")
-)
-
 '''
-# S3 저장 (Raw Data Lake)
-# parsed_df.writeStream : 스트리밍 데이터를 어디론가 계속 보내기
-#.format("parquet") : 저장 포맷 Parquet -> 컬럼 기반 저장, 압축 효율 좋음
-#.option("path", "s3a://your-bucket/bus/raw/") : s3a:// -> spark에서 s3 접근할 때 사용하는 프로토콜, "your-bucket/bus/raw/" -> 데이터 쌓이는 경로
-#.outputMode("append") : 새 데이터만 계속 추가, 기존 데이터는 안 건드림
-#.start() : 스트리밍 실행 시작
-s3_query = parsed_df.writeStream \
-    .format("parquet") \
-    .option("path", "s3a://your-bucket/bus/raw/") \
+# key, value test
+debug_query = kafka_df.selectExpr(
+    "CAST(key AS STRING)",
+    "CAST(value AS STRING)"
+).writeStream \
+    .format("console") \
     .outputMode("append") \
+    .option("truncate", False) \
     .start()
 '''
 
-# spark 스트리밍은 데이터가 끝없음. => spark는 언제까지 데이터를 들고 있어야 하는지 모름, 늦게 들어오는 데이터도 계속 기다리면 메모리 폭발 => watermark 필요
-parsed_df = parsed_df.withWatermark("lastupdate", "5 minutes") # "event_tme" 기준으로 5분 지난 데이터는 늦게 들어와도 버려라
+# schema registry
+SCHEMA_REGISTRY = "http://schema-registry:8081"
+TOPIC = "bus_raw_data"
 
-# 집계 (1분 단위 평균 도착시간) : 1분 단위 + 버스별로 그룹화해서 도착시간 평균을 계산하는 스트리밍 집계
-# 왜 window가 필요하냐 : 스트리밍 데이터는 끝이 없음. 그냥 group by 하면 끝나지 않음 -> 시간 단위로 잘라서 집계
-# 같은 1분 window 안에서는 값 게속 바뀜, 그래서 outputMode 선택 중요(append/update)
-agg_df = parsed_df.groupBy(
-    window(col("lastupdate"), "1 minute"), # evnet_time 기준으로 1분짜리 시간 구간(window) 생성 (실시간 데이터는 계속 들어오기 때문에 시간별로 묶어서 처리)
-    col("bus_id")
-).agg(
-    avg("arrival_sec_1").alias("avg_arrival_sec_1"),
-    avg("arrival_sec_2").alias("avg_arrival_sec_2")
-) #다음/다다음 버스 도착 예상 시간을 의미
-# 왜 이렇게 계산하냐 : 도착 예상 시간을 안정화 하기 위해서임. 센서/데이터는 항상 흔들리기 때문에 그대로 쓰면 이상하게 보임 ex) 10초 → 200초 → 40초 → 35초. 때문에 평균을 쓰면 ≈ 70초 (더 안정적)
-# 이 데이터를 계속 쌓으면 => 실시간:현재 교통 상태 / 과거 데이터:머신러닝 학습 / 미래:도착시간 예측 모델
+schema_url = f"{SCHEMA_REGISTRY}/subjects/{TOPIC}-value/versions/latest"
 
-# window flatten
-# spark에서는 window aggregation을 하면 결과가 중첩 구조(struct)로 나오는데, 이걸 RDB에 넣거나 CSV/BI 툴에서 쓰려면 중첩 구조를 평평한 테이블 형태로 바꿔야 함
-agg_df = agg_df.select(
-    col("window.start").alias("start_time"),
-    col("window.end").alias("end_time"),
-    col("bus_id"),
-    col("avg_arrival_sec_1").alias("avg_arrival1"),
-    col("avg_arrival_sec_2").alias("avg_arrival2")
+schema = requests.get(schema_url).json()["schema"]
+
+#test
+print(f"Delivered success: {schema}")
+
+
+# avro deserialize
+df = kafka_df.select(
+    from_avro(
+        expr("substring(value, 6, length(value)-5)"),
+        schema  # JSON Avro schema
+    ).alias("data")
+).select("data.*")
+
+
+# dedup 중복 제거 + watermark
+# watermark 역할 : 이 시간 이전 데이터는 이제 중복 체크 안 함
+# ex) event_time_ts < current_time - 5min → 버림
+# watermark 없으면 state 무한 증가 위험 -> spark가 모든 key를 계속 기억함, 메모리 계속 증가
+# 같은 DataFrame lineage 안에서 watermark는 한 번만 정의해야 함
+# =========================
+df = df.withWatermark("event_time", "5 minutes") \
+    .dropDuplicates(["bus_id", "event_time"])
+
+
+# .trigger(processingTime="10 seconds") => 10초마다 최대한 실행함을 의미(정확히 10초마다 실행이 아님)
+query = df.writeStream \
+    .format("console") \
+    .outputMode("append") \
+    .trigger(processingTime="10 seconds") \
+    .option("truncate", False) \
+    .start()
+
+
+# lastupdate 생성 => 데이터가 실제로 들어간 시간
+# spark는 내부적으로 timestamp 컬럼만 "시간 흐름"으로 판단함
+# =========================
+df = df.withColumn(
+    "lastupdate",
+    current_timestamp()
 )
 
-# parquet sink (data lake)
-# 데이터를 parquet 파일로 계속 저장하는 '스트리밍 쓰기 설정'
-# parsed_df.writeStream : 일반 write가 아니라 writeStream(계속 쓰기)를 사용
-#.format("parquet") : 저장 포맷을 parquet로 지정
-#.option("path", "/data/raw") : 실제 데이터 파일이 저장될 위치
-#.option("checkpointLocation", "/chk/parquet/") : spark가 스트리밍 상태를 저장하는 곳 => 어디까지 읽었는지(offset), 장애 복구 위치, 중복 처리 방지 정보
-#.outputMode("append") : 새로운 데이터만 계속 추가
-#.start() : 실제 스트리밍 작업 시작
-logger.info("Starting Parquet sink...")
 
-#30초마다 한 번씩 작업
-parquet_query = parsed_df.writeStream \
+############################# s3 write 로직 ##################################
+#용량 제한으로 주석처리 (잘 올라가는 거 확인함)
+'''
+# s3 저장
+# partition column 생성
+df = df.withColumn(
+    "dt",
+    to_date(col("event_time"))
+)
+
+
+# raw parquet 저장 
+raw_query = df.writeStream \
     .format("parquet") \
-    .option("path", "/data/raw") \
-    .option("checkpointLocation", "/data/chk/parquet/") \
+    .option(
+        "path",
+        "s3a://mybus-arrival-pipeline/bus/raw/"
+    ) \
+    .option(
+        "checkpointLocation",
+        "/chk/s3/raw"
+    ) \
+    .partitionBy("dt") \
     .outputMode("append") \
     .trigger(processingTime="30 seconds") \
     .start()
 
-# MySQL 저장 함수 (batch write)
-# spark 스트리밍 결과를 mysql에 배치 단위로 저장하는 함수
-def write_to_mysql(batch_df, batch_id) :
-    logger.info(f"Writing batch {batch_id} to MySQL")
+'''
 
-    if batch_df.count() == 0 :
-        return
+############################## s3 read 로직 ##################################
+#(잘 읽혀지는 거 확인함)
+'''
+# 아래처럼 read하면 partition 기준 컬럼이 dataframe에 없음
+df = spark.read.parquet("s3a://mybus-arrival-pipeline/bus/raw/dt=2026-05-08/")
 
-    batch_df.write \
-        .format("jdbc") \
-        .option("url", "jdbc:mysql://mysql:3306/bus") \
-        .option("driver", "com.mysql.cj.jdbc.Driver") \
-        .option("dbtable", "bus_arrival") \
-        .option("user", "root") \
-        .option("password", "wlgml3574@#") \
-        .option("batchsize", 1000) \
-        .mode("append") \
-        .save()
+# 아래처럼 read해야 partition column 까지 함께 dataframe에서 확인 가능
+df = spark.read \
+    .option("basePath", "s3a://mybus-arrival-pipeline/bus/raw/") \
+    .parquet("s3a://mybus-arrival-pipeline/bus/raw/dt=2026-05-08/")
 
-# MySQL Sink
-# spark 스트리밍 결과를 배치 단위로 mysql에 쓰면서 체크포인트로 상태를 저장
-# 스트리밍은 데이터가 계속 들어오니까 배치 단위로 db 저장
-# checkpoint 역할 : 어디까지 처리했는지 저장 => offset(kafka 위치), state(window 계산 결과), 실패 복구 정보
-#.option("checkpointLocation", "s3a://your-bucket/checkpoint/mysql/") \
-logger.info("Starting mysql sink...")
+df.show(30, truncate=False)
+'''
 
-mysql_query = agg_df.writeStream \
-    .foreachBatch(write_to_mysql) \
+
+
+# Aggregation => 버스 도착 시간 실시간 평균
+# API 데이터는 노이즈가 있음 => GPS 오차, 교통 상황 반영 지연, 예측 알고리즘 흔들림 등의 이유로 값이 계속 출렁임
+# => 그래서 1분 평균을 내면 갑자기 300초 → 120초 → 250초 튀는 걸 안정화할 수 있음.
+# 10초 마다 호출 -> 1분에 데이터 6개 / 30초마다 호출 -> 1분에 데이터 2개 => 이걸 평균 내면 단일 값보다 훨씬 신뢰도 높아짐
+# window(col("lastupdate"), "1 minute") => 같은 시간대 데이터끼리 묶어서 통계 내기
+# =========================
+agg_df = df.groupBy(
+    window(col("event_time"), "5 minute"),
+    col("bus_id")
+    ).agg(
+        avg("arrival_sec_1").alias("avg_arrival1"),
+        avg("arrival_sec_2").alias("avg_arrival2"),
+        first("station_id", ignorenulls=True).alias("station_id"),
+        first("station_name", ignorenulls=True).alias("station_name"),
+        max("lastupdate").alias("lastupdate") 
+    )
+
+# select + round
+result_df = agg_df.select(
+    col("window.start").alias("start_time"),
+    col("window.end").alias("end_time"),
+    col("bus_id"),
+    col("station_id"),
+    col("station_name"),
+    col("lastupdate"),
+    round(col("avg_arrival1"), 2).alias("avg_arrival1"),
+    round(col("avg_arrival2"), 2).alias("avg_arrival2")
+)
+
+# .outputMode("append") \ : 완전히 끝난 결과만 출력
+# .outputMode("update") \ : 바뀐 결과만 계속 출력
+query = result_df.writeStream \
+    .format("console") \
     .outputMode("update") \
-    .option("checkpointLocation", "/data/chk/mysql/") \
-    .option(processingTime="30 seconds") \
+    .trigger(processingTime="10 seconds") \
+    .option("truncate", False) \
     .start()
 
-# Streaming 유지 : 스트리밍 프로그램을 '계속 실행 상태로 유지하는 역할'
-logger.info("Streaming started successfully")
+# mysql upsert function
+def write_to_mysql(batch_df, batch_id):
+
+    print(f"batch_id = {batch_id}")
+
+    # empty batch skip (중요)
+    if batch_df.rdd.isEmpty():
+        print("empty batch skipped")
+        return
+
+    # repartition (MySQL 안전 수준)
+    # partition 2개 => excutor 2개 => 각각 함수 실행
+    batch_df = batch_df.repartition(2)
+
+    print("schema:")
+    batch_df.printSchema()
+
+    def upsert_partition(partition):
+
+        conn = None
+        cursor = None
+
+        sql = """
+        INSERT INTO bus_arrival (
+            start_time, end_time, bus_id,
+            station_id, station_name,
+            avg_arrival1, avg_arrival2, lastupdate
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            avg_arrival1 = VALUES(avg_arrival1),
+            avg_arrival2 = VALUES(avg_arrival2),
+            station_id = VALUES(station_id),
+            station_name = VALUES(station_name),
+            lastupdate = VALUES(lastupdate)
+        """
+
+        batch = []
+
+        try:
+            
+            conn = pymysql.connect(
+                host="mysql",
+                user="root",
+                password="wlgml3574@#",
+                database="bus",
+                autocommit=False,
+                connect_timeout=10,
+                read_timeout=30,
+                write_timeout=30
+            )
+
+            cursor = conn.cursor()
+
+            for row in partition:
+
+                print("rows:", row)
+                batch.append((
+                    row.start_time,
+                    row.end_time,
+                    row.bus_id,
+                    row.station_id,
+                    row.station_name,
+                    float(row.avg_arrival1) if row.avg_arrival1 is not None else None,
+                    float(row.avg_arrival2) if row.avg_arrival2 is not None else None,
+                    row.lastupdate
+                ))
+
+                print("after sample rows:")
+
+                # batch size (MySQL safe range)
+                if len(batch) >= 200:
+                    print("executing batch insert:", len(batch))
+                    cursor.executemany(sql, batch)
+                    conn.commit()
+                    batch.clear()
+
+            # remaining batch flush
+            if batch:
+                print("final flush:", len(batch))
+                print("batch data:", batch)
+                cursor.executemany(sql, batch)
+                conn.commit()
+
+        except Exception as e:
+            print(f"partition error: {e}")
+            if conn:
+                conn.rollback()
+
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+
+    # execute in parallel partitions
+    batch_df.foreachPartition(upsert_partition)  # 병렬 처리
+
+# streaming query
+query = result_df.writeStream \
+    .foreachBatch(write_to_mysql) \
+    .outputMode("update") \
+    .option("checkpointLocation", "/chk/mysql/") \
+    .trigger(processingTime="10 seconds") \
+    .start()
+
+# S3 → 원본 + 재처리용 (필수) => S3 raw 저장 설계 (partition 포함)
+# MySQL → 가공 + 빠른 조회 (필수) => overwrite/upsert 가능하게
+# Dashboard → MySQL 기반 시각화
+# airflow로 자동화까지 하기.
+
+# 재처리 가능한 S3 partition 설계 + Spark backfill 코드 구조 물어보기
+
 
 spark.streams.awaitAnyTermination()
-
-

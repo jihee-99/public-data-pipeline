@@ -5,7 +5,7 @@ services:
     image: confluentinc/cp-zookeeper:latest  #어떤 프로그램을 가져와서 컨테이너로 실행할지 회사/이미지명(서비스):버전
     container_name: zookeeper
     networks:
-      - kafka-network
+      - data-platform
     environment:
       ZOOKEEPER_SERVER_ID: 1 #주키퍼를 식별하는 아이디로 유일한 값. 1개의 주키퍼를 사용하는 경우 없어도 문제 없음
       ZOOKEEPER_CLIENT_PORT: 2181 #주키퍼 포트, 기본 포트로 2181 사용
@@ -23,15 +23,15 @@ services:
     depends_on:
       - zookeeper #zookeeper가 먼저 실행된 후에 시작
     networks:
-      - kafka-network
+      - data-platform
     environment:
       KAFKA_BROKER_ID: 1 # 카프카의 브로커 아이디로 유일한 값, 1개의 브로커를 사용할 예정이라 없어도 문제 없음
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181 # 주키퍼에 연결하기 위한 대상 지정 [서비스이름:컨테이너내부포트]
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT # 보안을 위한 프로토콜 매핑. PLAINTEXT는 암호화하지 않은 일반 평문
       #KAFKA_LISTENERS : INTERNAL://kafka1:29092 #컨테이너 내부에서 브로커가 리슨할 주소
       #KAFKA_LISTENERS : INTERNAL://kafka1:19092, EXTERNAL://kafka1:9092 #컨테이너 내부에서 브로커가 리슨할 주소
-      KAFKA_LISTENERS : INTERNAL://0.0.0.0:19092, EXTERNAL://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka1:19092, EXTERNAL://localhost:9092 # 외부 클라이언트에 알려주는 리스너 주소
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:19092,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka1:19092,EXTERNAL://localhost:9092 # 외부 클라이언트에 알려주는 리스너 주소
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL 
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3 # 토픽 복제에 대한 설정 값 => 리더 브로커 1개만 저장, 팔로워 없음 => 브로커 1이 죽으면 offset 정보 일부/전체 손실 가능, consumer group 재시작 시, 이전 읽은 위치(offset) 복구 불가능 (장점 : 개발 환경에서 빠른 초기 설정 가능, 리소스 사용 최소화)
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2 # 트랜잭션 최소 ISR(InSyncReplicas 설정) 수
@@ -48,14 +48,14 @@ services:
     depends_on:
       - zookeeper
     networks:
-      - kafka-network
+      - data-platform
     environment:
       KAFKA_BROKER_ID: 2
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT, EXTERNAL:PLAINTEXT    # 리스너 이름:PLAINTEXT(평문 - 보안없이)
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT    # 리스너 이름:PLAINTEXT(평문 - 보안없이)
       #KAFKA_LISTENERS : INTERNAL://kafka2:19093, EXTERNAL://kafka2:9093 #컨테이너 내부에서 브로커가 리슨할 주소
-      KAFKA_LISTENERS : INTERNAL://0.0.0.0:19093, EXTERNAL://0.0.0.0:9093 #컨테이너 내부에서 브로커가 리슨할 주소
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka2:19093, EXTERNAL://localhost:9093  # 리스너 주소(카프카 내부 브로커간 통신 kafka1:19093, 외부 접근 localhost:9093)
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:19093,EXTERNAL://0.0.0.0:9093 #컨테이너 내부에서 브로커가 리슨할 주소
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka2:19093,EXTERNAL://localhost:9093  # 리스너 주소(카프카 내부 브로커간 통신 kafka1:19093, 외부 접근 localhost:9093)
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL                                      # 카프카 브로커간 통신에 사용
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
@@ -72,14 +72,14 @@ services:
     depends_on:
       - zookeeper
     networks:
-      - kafka-network
+      - data-platform
     environment:
       KAFKA_BROKER_ID: 3
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT, EXTERNAL:PLAINTEXT    # 리스너 이름:PLAINTEXT(평문 - 보안없이)
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT    # 리스너 이름:PLAINTEXT(평문 - 보안없이)
       #KAFKA_LISTENERS : INTERNAL://kafka3:19094, EXTERNAL://kafka3:9094 #컨테이너 내부에서 브로커가 리슨할 주소
-      KAFKA_LISTENERS : INTERNAL://0.0.0.0:19094, EXTERNAL://0.0.0.0:9094 #컨테이너 내부에서 브로커가 리슨할 주소
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka3:19094, EXTERNAL://localhost:9094  # 리스너 주소(카프카 내부 브로커간 통신 kafka1:19094, 외부 접근 localhost:9094)
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:19094,EXTERNAL://0.0.0.0:9094 #컨테이너 내부에서 브로커가 리슨할 주소
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka3:19094,EXTERNAL://localhost:9094  # 리스너 주소(카프카 내부 브로커간 통신 kafka1:19094, 외부 접근 localhost:9094)
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL                                      # 카프카 브로커간 통신에 사용
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
@@ -92,12 +92,15 @@ services:
       context: .
       dockerfile: python_app/Dockerfile
     container_name: python-producer
+    env_file:
+      - .env
     depends_on:
       - kafka1
     networks:
-      - kafka-network
+      - data-platform
     environment:
       KAFKA_BROKER: kafka1:19092
+      ENV: prod
     restart: unless-stopped
   schema-registry:
     image: confluentinc/cp-schema-registry:latest
@@ -109,7 +112,7 @@ services:
     ports:
       - "8081:8081"
     networks:
-      - kafka-network
+      - data-platform
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
@@ -117,37 +120,54 @@ services:
     restart: unless-stopped
   spark-stream:
     build:
-      context: ./spark
-      dockerfile: Dockerfile # 내가 만든 dockerfile 사용 (JAR 포함)
+      #context: ./spark
+      #dockerfile: Dockerfile # 내가 만든 dockerfile 사용 (JAR 포함)
+      context: .
+      dockerfile: spark/Dockerfile
     container_name: spark-stream
     depends_on: # Spark 실행 전에 kafka/mysql 먼저 뜨게.
       - kafka1
       - kafka2
       - kafka3
       - mysql
+      - schema-registry
     networks:
-      - kafka-network
+      - data-platform
     volumes:
+      # 앱 코드
       - ./spark:/app # 왼쪽 = 내 PC(호스트), 오른쪽 = 컨테이너 내부 => 내 pc의 spark/process_spark.py가 컨테이너 안에서는 /app/process_spark.py
+      # Spark jars (ivy 기반 고정)
+      #- ./spark/jars:/opt/spark/jars
+      #- ./spark/jars:/app/jars
+      # 데이터 저장
       - ./data:/data # 내 spark 코드에서는 .option("path", "/data/raw/")가 실제로는 ./data/raw/
-      - ./data/chk:/data/chk # 내 spark 코드에서는 .option("checkpointLocation", "/data/chk/parquet/")가 실제로는 .data/chk/parquet/
+      # checkpoint (streaming state)
+      - ./chk:/chk # 내 spark 코드에서는 .option("checkpointLocation", "/chk/mysql/")가 실제로는 .chk/parquet/
     environment:
       - SPARK_LOCAL_DIRS=/tmp/spark
+      - PYSPARK_PYTHON=python3    
+      # ===== AWS S3 =====
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}  
+      - AWS_REGION=us-east-1
     command:
       /opt/spark/bin/spark-submit
       --master local[*]
       --conf spark.driver.host=spark-stream
-      --conf spark.sql.streaming.checkpointLocation=/data/chk
-      /app/process_spark.py #컨테이너가 시작되면 자동으로 실행됨
+      /app/process_spark.py
     restart: unless-stopped
   mysql:
     image: mysql:8.0.37
     container_name: mysql
-    command: --default-authentication-plugin=mysql_native_password #mysql 인증 방식을 변경하는 설정 -> mysql 8부터 인증 방식이 바뀌었는데 일부 클라이언트(spark,python 등)가 호환이 안 돼서 변경 필요.
+    command: 
+      - --default-authentication-plugin=mysql_native_password #mysql 인증 방식을 변경하는 설정 -> mysql 8부터 인증 방식이 바뀌었는데 일부 클라이언트(spark,python 등)가 호환이 안 돼서 변경 필요.
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
     ports:
-      - "3307:3306"
+      - "3307:3306" #내 PC localhost:3307 → 컨테이너 mysql:3306 연결
     networks:
-      - kafka-network
+      - data-platform
     environment:
       MYSQL_ROOT_PASSWORD: wlgml3574@#
       MYSQL_DATABASE: bus
@@ -155,9 +175,25 @@ services:
       - mysql-data:/var/lib/mysql # DB 데이터 컨테이너 삭제해도 유지. mysql-data(docker 볼륨) -> /var/lib/mysql(mysql 실제 데이터 폴더)
       - ./mysql/initdb:/docker-entrypoint-initdb.d # 최초 실행 시 자동 테이블 생성(최초 1번만 실행됨), 즉 기존 volume 있으면 실행 안 됨. 내 pc의 mysql/initdb 폴더 전체 -> mysql 컨테이너의 init 스크립트 폴더로 그대로 연결
     restart: unless-stopped
+  superset:
+    build:
+      context: .
+      dockerfile: superset/Dockerfile
+    container_name: superset
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: d8LC1g2pbZTWUGQXlNlkGPUmS9ZK4nnxJY5MYhaHtUmncWCTNQ84uSpc
+    depends_on:
+      - mysql
+    networks:
+      - data-platform
+    volumes:
+    - superset_home:/app/superset_home
+    restart: unless-stopped
 networks: #다중 브로커 카프카 클러스터는 같은 Docker 네트워크에 있어야 서로를 올바르게 찾음.
-  kafka-network:    # 동일한 네트워크 구성
-    driver: bridge #HTTP 기반 클라이언트가 카프카 클러스터와 쉽게 상호 작용할 수 있도록 도와줌
+  data-platform:    # 동일한 네트워크 구성
+    external: true #HTTP 기반 클라이언트가 카프카 클러스터와 쉽게 상호 작용할 수 있도록 도와줌
 
 volumes:
   mysql-data: #이 이름의 볼륨을 docker가 만들어서 관리하라는 선언. => DB 데이터 유지됨. 컨테이너 삭제해도 데이터 살아있음
@@ -167,3 +203,4 @@ volumes:
   kafka2-data:
   kafka3-data:
   spark-ivy:
+  superset_home:

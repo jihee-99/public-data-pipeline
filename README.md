@@ -1,132 +1,38 @@
-# 📊 데이터 파이프라인 구축 프로젝트
+<프로젝트 소개>
+실시간 버스 도착 정보 스트리밍 데이터 파이프라인 구축
 
-## 📌 프로젝트 소개
+- Kafka와 Spark Structured Streaming을 활용하여
+실시간 버스 도착 데이터를 수집·처리하는
+스트리밍 데이터 파이프라인을 구축했습니다.
 
-공공데이터 API를 활용하여 데이터를 수집하고,
-자동화된 데이터 파이프라인을 통해 정제 및 저장까지 수행하는 프로젝트입니다.
+- Schema Registry 기반 Avro 직렬화를 적용하여
+Producer-Consumer 간 스키마 일관성을 유지했으며,
 
-이 프로젝트는 데이터 엔지니어링의 핵심 과정인
-**데이터 수집 → 처리 → 저장 → 자동화**를 직접 구현하는 것을 목표로 합니다.
+- Spark Streaming의 watermark 및 deduplication 기능을 활용해
+이벤트 타임 기반 중복 제거와 안정적인 스트리밍 처리를 구현했습니다.
 
----
+- 또한 원본 데이터 보존 및 재처리를 위해 S3 Data Lake 구조를 설계하고,
+실시간 조회를 위한 MySQL serving layer를 구축했습니다.
 
-## 🏗 아키텍처
+- 현재 Spark Streaming 기반 실시간 파이프라인은 정상 동작하며,
+Airflow를 활용한 workflow orchestration 및 자동화 파이프라인을 추가 구현 중입니다.
+Docker 기반 Airflow 환경에서 DAG scheduling 및 task dependency 구성을 진행하고 있습니다.
 
-```
-[공공데이터 API]
-        ↓
-[Airflow DAG (스케줄링)]
-        ↓
-[Raw 데이터 저장]
-        ↓
-[데이터 정제 (Python)]
-        ↓
-[MySQL 저장]
-```
 
----
+<기술 스택>
+[Data Pipeline]
+Apache Kafka
+Spark Structured Streaming
+Schema Registry
+Avro
 
-## 🔄 데이터 흐름
+[Storage]
+AWS S3
+MySQL
 
-1. 공공데이터 API를 통해 데이터를 주기적으로 수집
-2. 수집된 데이터를 Raw 형태로 저장
-3. Pandas를 활용하여 데이터 정제 및 변환
-4. 정제된 데이터를 MySQL에 저장
-5. Airflow를 통해 전체 과정 자동화
+[Infra]
+Docker Compose
+Multi-broker Kafka Cluster
 
----
-
-## 🛠 사용 기술
-
-* Python
-* Apache Airflow
-* MySQL
-* Docker
-* Pandas
-
----
-
-## 🚀 실행 방법
-
-### 1. Docker로 MySQL 실행
-
-```bash
-docker run -d \
-  --name mysql-container \
-  -e MYSQL_ROOT_PASSWORD=1234 \
-  -p 3306:3306 \
-  mysql:8
-```
-
-### 2. Python 가상환경 생성 및 활성화
-
-```bash
-python -m venv airflow_env
-source airflow_env/bin/activate  # macOS / Linux
-# airflow_env\Scripts\activate   # Windows
-```
-
-### 3. Airflow 설치
-
-```bash
-pip install apache-airflow
-```
-
-### 4. Airflow 실행
-
-```bash
-airflow db init
-airflow webserver
-airflow scheduler
-```
-
-### 5. DAG 실행
-
-* Airflow UI 접속 후 DAG 활성화
-
----
-
-## 📁 프로젝트 구조
-
-```
-project/
- ├─ dags/
- │    └─ data_pipeline.py
- ├─ scripts/
- │    ├─ extract.py
- │    ├─ transform.py
- │    └─ load.py
- ├─ data/
- ├─ docker/
- └─ README.md
-```
-
----
-
-## ⚠️ 트러블슈팅
-
-### 1. Airflow 설치 시 dependency 충돌
-
-* 문제: 패키지 버전 충돌 발생
-* 해결: Python 가상환경 분리
-
-### 2. MySQL 연결 실패
-
-* 문제: 컨테이너 실행 후 접속 불가
-* 해결: 포트(3306) 및 계정 정보 확인
-
----
-
-## 💡 개선 방향
-
-* Apache Spark를 활용한 대용량 데이터 처리
-* Docker Compose를 활용한 전체 환경 통합
-* 데이터 시각화 대시보드 추가 (Streamlit)
-
----
-
-## 🎯 프로젝트 목표
-
-* 데이터 파이프라인 전체 흐름 이해
-* Airflow 기반 자동화 경험
-* 실무형 데이터 엔지니어링 역량 강화
+[Visualization]
+Apache Superset

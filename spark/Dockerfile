@@ -1,23 +1,35 @@
-FROM apache/spark:3.5.1
+FROM apache/spark:3.5.1 AS builder
 
 USER root
 
-ENV SPARK_HOME=/opt/spark
-ENV PATH="$SPARK_HOME/bin:$PATH"
-ENV SPARK_LOCAL_DIRS=/tmp/spark
+RUN /opt/spark/bin/spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,\
+org.apache.spark:spark-avro_2.12:3.5.1,\
+mysql:mysql-connector-java:8.0.33,\
+org.apache.hadoop:hadoop-aws:3.3.4,\
+com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+  --class org.apache.spark.examples.SparkPi \
+  /opt/spark/examples/jars/spark-examples_2.12-3.5.1.jar
 
+RUN mkdir -p /ivy \
+ && cp -r /root/.ivy2/jars /ivy/jars
+
+
+FROM apache/spark:3.5.1
+
+USER root
 WORKDIR /app
 
-# 앱 코드
-COPY process_spark.py /app/process_spark.py
+COPY spark/process_spark.py /app/process_spark.py
 
-# 🔥 Kafka connector JAR 미리 다운로드
-ADD https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_2.12/3.5.1/spark-sql-kafka-0-10_2.12-3.5.1.jar /opt/spark/jars/
-ADD https://repo1.maven.org/maven2/org/apache/kafka/kafka-clients/3.5.1/kafka-clients-3.5.1.jar /opt/spark/jars/
+COPY python_app /app/python_app
 
-# (필요하면 추가 dependency 여기에 더 넣음)
+# dependency 고정
+COPY --from=builder /ivy/jars /opt/spark/jars
 
-RUN mkdir -p /home/spark /tmp/spark \
- && chown -R spark:spark /app /tmp /home/spark /opt/spark
+COPY spark/requirements.txt /app/requirements.txt
+RUN pip install -r /app/requirements.txt
+
+RUN chown -R spark:spark /app
 
 USER spark
