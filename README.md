@@ -1,4 +1,5 @@
 <프로젝트 소개>
+
 실시간 버스 도착 정보 스트리밍 데이터 파이프라인 구축
 
 - Kafka와 Spark Structured Streaming을 활용하여
@@ -20,19 +21,20 @@ Docker 기반 Airflow 환경에서 DAG scheduling 및 task dependency 구성을 
 
 
 <기술 스택>
+
 [Data Pipeline]
-Apache Kafka
-Spark Structured Streaming
-Schema Registry
-Avro
+- Apache Kafka
+- Spark Structured Streaming
+- Schema Registry
+- Avro
 
 [Storage]
-AWS S3
-MySQL
+- AWS S3
+- MySQL
 
 [Infra]
-Docker Compose
-Multi-broker Kafka Cluster
+- Docker Compose
+- Multi-broker Kafka Cluster
 
 [Visualization]
-Apache Superset
+- Apache Superset
