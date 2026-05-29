@@ -17,6 +17,7 @@ services:
   kafka1: #실제로 데이터를 저장하고 처리하는 서버
     image: confluentinc/cp-kafka:6.2.1
     container_name: kafka1
+    platform: linux/amd64
     ports: #docker-compose.yml에서 내가 정하는 것. Python(로컬)에서 Kafka 접속하려면 필요, 외부에서 Kafka 접근할 때 필요
       - "9092:9092" #클라이언트 통신 포트
       - "19092:19092" #브로커 간 통신 포트
@@ -42,6 +43,7 @@ services:
   kafka2:
     image: confluentinc/cp-kafka:6.2.1
     container_name: kafka2
+    platform: linux/amd64
     ports:
       - "9093:9093"   # 클라이언트 통신 포트
       - "19093:19093" # 브로커 간 통신 포트
@@ -66,6 +68,7 @@ services:
   kafka3:
     image: confluentinc/cp-kafka:6.2.1
     container_name: kafka3
+    platform: linux/amd64
     ports:
       - "9094:9094"   # 클라이언트 통신 포트
       - "19094:19094" # 브로커 간 통신 포트
@@ -117,7 +120,50 @@ services:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka1:19092,kafka2:19093,kafka3:19094 #PLAINTEXT://kafka1:19092
-    restart: unless-stopped
+    restart: unless-stopped  
+  spark-master:
+    build:
+      context: .
+      dockerfile: spark/Dockerfile
+    container_name: spark-master
+    hostname: spark-master
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.master.Master
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "7077:7077"
+      - "8085:8080"
+    networks:
+      data-platform:
+        aliases:
+          - spark-master
+  spark-worker:
+    build:
+      context: .
+      dockerfile: spark/Dockerfile
+    container_name: spark-worker
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
+    volumes:
+      - ./spark:/app
+      - ./data:/data
+      - ./chk:/chk
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_LOCAL_DIRS=/tmp/spark
+      - PYSPARK_PYTHON=python3
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=us-east-1
+    depends_on:
+      - spark-master
+    networks:
+      - data-platform
   spark-stream:
     build:
       #context: ./spark
@@ -141,18 +187,17 @@ services:
       #- ./spark/jars:/app/jars
       # 데이터 저장
       - ./data:/data # 내 spark 코드에서는 .option("path", "/data/raw/")가 실제로는 ./data/raw/
-      # checkpoint (streaming state)
       - ./chk:/chk # 내 spark 코드에서는 .option("checkpointLocation", "/chk/mysql/")가 실제로는 .chk/parquet/
     environment:
       - SPARK_LOCAL_DIRS=/tmp/spark
       - PYSPARK_PYTHON=python3    
-      # ===== AWS S3 =====
+      # AWS S3
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}  
       - AWS_REGION=us-east-1
     command:
       /opt/spark/bin/spark-submit
-      --master local[*]
+      --master spark://spark-master:7077
       --conf spark.driver.host=spark-stream
       /app/process_spark.py
     restart: unless-stopped

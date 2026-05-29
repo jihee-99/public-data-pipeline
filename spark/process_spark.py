@@ -58,7 +58,7 @@ print(f"Delivered success: {schema}")
 
 
 # avro deserialize
-df = kafka_df.select(
+raw_df = kafka_df.select(
     from_avro(
         expr("substring(value, 6, length(value)-5)"),
         schema  # JSON Avro schema
@@ -66,47 +66,21 @@ df = kafka_df.select(
 ).select("data.*")
 
 
-# dedup 중복 제거 + watermark
-# watermark 역할 : 이 시간 이전 데이터는 이제 중복 체크 안 함
-# ex) event_time_ts < current_time - 5min → 버림
-# watermark 없으면 state 무한 증가 위험 -> spark가 모든 key를 계속 기억함, 메모리 계속 증가
-# 같은 DataFrame lineage 안에서 watermark는 한 번만 정의해야 함
-# =========================
-df = df.withWatermark("event_time", "5 minutes") \
-    .dropDuplicates(["bus_id", "event_time"])
-
-
-# .trigger(processingTime="10 seconds") => 10초마다 최대한 실행함을 의미(정확히 10초마다 실행이 아님)
-query = df.writeStream \
-    .format("console") \
-    .outputMode("append") \
-    .trigger(processingTime="10 seconds") \
-    .option("truncate", False) \
-    .start()
-
-
-# lastupdate 생성 => 데이터가 실제로 들어간 시간
-# spark는 내부적으로 timestamp 컬럼만 "시간 흐름"으로 판단함
-# =========================
-df = df.withColumn(
-    "lastupdate",
-    current_timestamp()
-)
-
-
+'''
 ############################# s3 write 로직 ##################################
 #용량 제한으로 주석처리 (잘 올라가는 거 확인함)
-'''
+
+
 # s3 저장
 # partition column 생성
-df = df.withColumn(
+s3_df = raw_df.withColumn(
     "dt",
     to_date(col("event_time"))
 )
 
 
 # raw parquet 저장 
-raw_query = df.writeStream \
+raw_query = s3_df.writeStream \
     .format("parquet") \
     .option(
         "path",
@@ -121,22 +95,50 @@ raw_query = df.writeStream \
     .trigger(processingTime="30 seconds") \
     .start()
 
-'''
+
 
 ############################## s3 read 로직 ##################################
 #(잘 읽혀지는 거 확인함)
-'''
+
 # 아래처럼 read하면 partition 기준 컬럼이 dataframe에 없음
-df = spark.read.parquet("s3a://mybus-arrival-pipeline/bus/raw/dt=2026-05-08/")
+df = spark.read.parquet("s3a://mybus-arrival-pipeline/bus/raw/dt=2026-05-28/")
 
 # 아래처럼 read해야 partition column 까지 함께 dataframe에서 확인 가능
 df = spark.read \
     .option("basePath", "s3a://mybus-arrival-pipeline/bus/raw/") \
-    .parquet("s3a://mybus-arrival-pipeline/bus/raw/dt=2026-05-08/")
+    .parquet("s3a://mybus-arrival-pipeline/bus/raw/dt=2026-05-28/")
 
 df.show(30, truncate=False)
+
 '''
 
+
+# dedup 중복 제거 + watermark
+# watermark 역할 : 이 시간 이전 데이터는 이제 중복 체크 안 함
+# ex) event_time_ts < current_time - 5min → 버림
+# watermark 없으면 state 무한 증가 위험 -> spark가 모든 key를 계속 기억함, 메모리 계속 증가
+# 같은 DataFrame lineage 안에서 watermark는 한 번만 정의해야 함
+agg_source_df = raw_df.withWatermark("event_time", "5 minutes") \
+    .dropDuplicates(["bus_id", "event_time"])
+
+
+# .trigger(processingTime="10 seconds") => 10초마다 최대한 실행함을 의미(정확히 10초마다 실행이 아님)
+# 디버깅용
+'''
+query = agg_source_df.writeStream \
+    .format("console") \
+    .outputMode("append") \
+    .trigger(processingTime="10 seconds") \
+    .option("truncate", False) \
+    .start()
+'''
+
+
+# lastupdate 생성 => 데이터가 실제로 들어간 시간
+agg_source_df = agg_source_df.withColumn(
+    "lastupdate",
+    current_timestamp()
+)
 
 
 # Aggregation => 버스 도착 시간 실시간 평균
@@ -144,8 +146,7 @@ df.show(30, truncate=False)
 # => 그래서 1분 평균을 내면 갑자기 300초 → 120초 → 250초 튀는 걸 안정화할 수 있음.
 # 10초 마다 호출 -> 1분에 데이터 6개 / 30초마다 호출 -> 1분에 데이터 2개 => 이걸 평균 내면 단일 값보다 훨씬 신뢰도 높아짐
 # window(col("lastupdate"), "1 minute") => 같은 시간대 데이터끼리 묶어서 통계 내기
-# =========================
-agg_df = df.groupBy(
+agg_df = agg_source_df.groupBy(
     window(col("event_time"), "5 minute"),
     col("bus_id")
     ).agg(
@@ -156,7 +157,6 @@ agg_df = df.groupBy(
         max("lastupdate").alias("lastupdate") 
     )
 
-# select + round
 result_df = agg_df.select(
     col("window.start").alias("start_time"),
     col("window.end").alias("end_time"),
@@ -170,125 +170,125 @@ result_df = agg_df.select(
 
 # .outputMode("append") \ : 완전히 끝난 결과만 출력
 # .outputMode("update") \ : 바뀐 결과만 계속 출력
+# 디버깅용
+'''
 query = result_df.writeStream \
     .format("console") \
     .outputMode("update") \
     .trigger(processingTime="10 seconds") \
     .option("truncate", False) \
     .start()
+'''
+
+def upsert_partition(partition):
+
+    conn = None
+    cursor = None
+
+    sql = """
+    INSERT INTO bus_arrival (
+        start_time, end_time, bus_id,
+        station_id, station_name,
+        avg_arrival1, avg_arrival2, lastupdate
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    ON DUPLICATE KEY UPDATE
+        avg_arrival1 = VALUES(avg_arrival1),
+        avg_arrival2 = VALUES(avg_arrival2),
+        station_id = VALUES(station_id),
+        station_name = VALUES(station_name),
+        lastupdate = VALUES(lastupdate)
+    """
+
+    batch = []
+
+    try:
+            
+        conn = pymysql.connect(
+            host="mysql",
+            user="root",
+            password="wlgml3574@#",
+            database="bus",
+            autocommit=False,
+            connect_timeout=10,
+            read_timeout=30,
+            write_timeout=30
+        )
+
+        cursor = conn.cursor()
+
+        for row in partition:
+
+            print("rows:", row)
+            batch.append((
+                row.start_time,
+                row.end_time,
+                row.bus_id,
+                row.station_id,
+                row.station_name,
+                float(row.avg_arrival1) if row.avg_arrival1 is not None else None,
+                float(row.avg_arrival2) if row.avg_arrival2 is not None else None,
+                row.lastupdate
+            ))
+
+            print("after sample rows:")
+
+            # batch size
+            if len(batch) >= 200:
+                print("executing batch insert:", len(batch))
+                cursor.executemany(sql, batch)
+                conn.commit()
+                batch.clear()
+
+        # remaining batch flush
+        if batch:
+            print("final flush:", len(batch))
+            print("batch data:", batch)
+            cursor.executemany(sql, batch)
+            conn.commit()
+
+    except Exception as e:
+        print(f"partition error: {e}")
+        if conn:
+            conn.rollback()
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # mysql upsert function
 def write_to_mysql(batch_df, batch_id):
 
     print(f"batch_id = {batch_id}")
 
-    # empty batch skip (중요)
+    # empty batch skip
     if batch_df.rdd.isEmpty():
         print("empty batch skipped")
         return
-
-    # repartition (MySQL 안전 수준)
+    
+    # repartition
     # partition 2개 => excutor 2개 => 각각 함수 실행
     batch_df = batch_df.repartition(2)
 
     print("schema:")
-    batch_df.printSchema()
+    batch_df.printSchema()    
 
-    def upsert_partition(partition):
-
-        conn = None
-        cursor = None
-
-        sql = """
-        INSERT INTO bus_arrival (
-            start_time, end_time, bus_id,
-            station_id, station_name,
-            avg_arrival1, avg_arrival2, lastupdate
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-            avg_arrival1 = VALUES(avg_arrival1),
-            avg_arrival2 = VALUES(avg_arrival2),
-            station_id = VALUES(station_id),
-            station_name = VALUES(station_name),
-            lastupdate = VALUES(lastupdate)
-        """
-
-        batch = []
-
-        try:
-            
-            conn = pymysql.connect(
-                host="mysql",
-                user="root",
-                password="wlgml3574@#",
-                database="bus",
-                autocommit=False,
-                connect_timeout=10,
-                read_timeout=30,
-                write_timeout=30
-            )
-
-            cursor = conn.cursor()
-
-            for row in partition:
-
-                print("rows:", row)
-                batch.append((
-                    row.start_time,
-                    row.end_time,
-                    row.bus_id,
-                    row.station_id,
-                    row.station_name,
-                    float(row.avg_arrival1) if row.avg_arrival1 is not None else None,
-                    float(row.avg_arrival2) if row.avg_arrival2 is not None else None,
-                    row.lastupdate
-                ))
-
-                print("after sample rows:")
-
-                # batch size (MySQL safe range)
-                if len(batch) >= 200:
-                    print("executing batch insert:", len(batch))
-                    cursor.executemany(sql, batch)
-                    conn.commit()
-                    batch.clear()
-
-            # remaining batch flush
-            if batch:
-                print("final flush:", len(batch))
-                print("batch data:", batch)
-                cursor.executemany(sql, batch)
-                conn.commit()
-
-        except Exception as e:
-            print(f"partition error: {e}")
-            if conn:
-                conn.rollback()
-
-        finally:
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
-
-    # execute in parallel partitions
-    batch_df.foreachPartition(upsert_partition)  # 병렬 처리
+    # 병렬 처리
+    batch_df.foreachPartition(upsert_partition)
+    
 
 # streaming query
 query = result_df.writeStream \
     .foreachBatch(write_to_mysql) \
     .outputMode("update") \
     .option("checkpointLocation", "/chk/mysql/") \
-    .trigger(processingTime="10 seconds") \
+    .trigger(processingTime="30 seconds") \
     .start()
 
-# S3 → 원본 + 재처리용 (필수) => S3 raw 저장 설계 (partition 포함)
-# MySQL → 가공 + 빠른 조회 (필수) => overwrite/upsert 가능하게
-# Dashboard → MySQL 기반 시각화
+# S3 : 원본 + 재처리용 => S3 raw 저장 설계 (partition 포함)
+# MySQL : 가공 + 조회  => overwrite/upsert 가능하게
+# Dashboard : MySQL 기반 시각화
 # airflow로 자동화까지 하기.
-
-# 재처리 가능한 S3 partition 설계 + Spark backfill 코드 구조 물어보기
-
-
 spark.streams.awaitAnyTermination()

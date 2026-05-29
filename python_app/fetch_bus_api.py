@@ -64,8 +64,7 @@ def delivery_report(err, msg):
         )
 
 
-# Data generator (정상 구조)
-# "bus_id": str(random.randint(1000, 2000)),
+# 임시 Data
 '''
 def fetch_data():
     return {
@@ -100,7 +99,7 @@ def extract_seconds(msg):
 
 
 # 데이터 생성
-# schema.avsc에서 arrival_sec_1,2의 default를 null로 해놓은 이유 : '곧 도착' 대응
+# schema.avsc에서 arrival_sec_1,2의 default를 null로 해놓은 이유 : 곧 도착 대응
 def fetch_data() :
     try :
 
@@ -114,8 +113,9 @@ def fetch_data() :
             "event_time": int(datetime.now().timestamp() * 1000)
         }
         return data
+        
 
-
+        '''
         #api 일일 제한으로 주석처리 (성공 확인함)
         url = 'http://ws.bus.go.kr/api/rest/arrive/getArrInfoByRoute'
         
@@ -150,8 +150,7 @@ def fetch_data() :
         # python datetime을 kafka에 그대로 전달 불가 => timestamp(long) 형식 사용
         dt = datetime.strptime(item["mkTm"], "%Y-%m-%d %H:%M:%S.%f")
 
-        #필요한 필드만 추출해서 dict로 변환
-        '''
+        #필요한 필드만 추출해서 dict로 변환        
         data = {
             "station_id": item["stId"],
             "station_name": item["stNm"],
@@ -160,9 +159,10 @@ def fetch_data() :
             "arrival_sec_2": extract_seconds(item["arrmsg2"]),
             "event_time": int(dt.timestamp() * 1000)
         }
-        '''       
+           
 
         return data
+        '''
     except Exception as e:
         print(f"JSON 파싱 실패: {e}")
 
@@ -180,9 +180,7 @@ def send_to_kafka(data):
     except Exception as e:
         print(f"Kafka produce error: {e}")
 
-# =========================
-# Main loop
-# =========================
+
 def run():
     try:
         while True:

@@ -20,6 +20,9 @@ FROM apache/spark:3.5.1
 USER root
 WORKDIR /app
 
+########추가
+COPY spark/conf/core-site.xml /opt/spark/conf/core-site.xml
+
 COPY spark/process_spark.py /app/process_spark.py
 
 COPY python_app /app/python_app
